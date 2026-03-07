@@ -289,7 +289,7 @@ function computeObserved(evidence: EvidencePackage[]) {
 
 function computeComplianceSignal(
   evidence: EvidencePackage[],
-  observed: ReturnType<typeof computeObserved>,
+  _observed: ReturnType<typeof computeObserved>,
   scoring: EngineeringStudioPolicy['scoring'],
   mandate?: WorkMandate,
 ): { signal: number; testsPresent: boolean; violations: string[]; present: string[]; missing: string[] } {
