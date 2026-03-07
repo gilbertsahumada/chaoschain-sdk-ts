@@ -7,7 +7,12 @@ export default defineConfig({
     'providers/compute/index': 'src/providers/compute/index.ts',
   },
   format: ['cjs', 'esm'],
-  dts: false,
+  dts: true,
+  outExtension({ format }) {
+    return {
+      js: format === 'cjs' ? '.cjs' : '.js',
+    };
+  },
   splitting: false,
   sourcemap: true,
   clean: true,

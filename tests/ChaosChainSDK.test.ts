@@ -450,4 +450,34 @@ describe('ChaosChainSDK', () => {
       }).toThrow();
     });
   });
+
+  describe('Guide Method Signatures', () => {
+    const testPrivateKey = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
+
+    it('registerIdentity is callable with optional metadata', () => {
+      const sdk = new ChaosChainSDK({
+        agentName: 'TestAgent',
+        agentDomain: 'test.example.com',
+        agentRole: AgentRole.VERIFIER,
+        network: NetworkConfig.BASE_SEPOLIA,
+        privateKey: testPrivateKey,
+      });
+
+      expect(typeof sdk.registerIdentity).toBe('function');
+    });
+
+    it('sdk.studio is a StudioClient instance', () => {
+      const sdk = new ChaosChainSDK({
+        agentName: 'TestAgent',
+        agentDomain: 'test.example.com',
+        agentRole: AgentRole.VERIFIER,
+        network: NetworkConfig.BASE_SEPOLIA,
+        privateKey: testPrivateKey,
+      });
+
+      expect(sdk.studio).toBeDefined();
+      expect(typeof sdk.studio.registerWithStudio).toBe('function');
+      expect(typeof sdk.studio.submitScoreVectorForWorker).toBe('function');
+    });
+  });
 });

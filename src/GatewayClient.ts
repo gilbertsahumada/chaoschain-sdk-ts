@@ -17,6 +17,8 @@ import {
   GatewayErrorInfo,
   GatewayRetryConfig,
   ScoreSubmissionMode,
+  PendingWorkResponse,
+  WorkEvidenceResponse,
 } from './types';
 import {
   GatewayError,
@@ -35,7 +37,21 @@ export class GatewayClient {
   private retryConfig?: GatewayRetryConfig;
 
   constructor(config: GatewayClientConfig) {
-    this.gatewayUrl = config.gatewayUrl.replace(/\/$/, ''); // Remove trailing slash
+    const rawBaseUrl = config.baseUrl ?? config.gatewayUrl ?? 'https://gateway.chaoscha.in';
+    let parsed: URL;
+    try {
+      parsed = new URL(rawBaseUrl);
+    } catch {
+      throw new Error(
+        `Invalid gateway baseUrl "${rawBaseUrl}". Provide a valid absolute URL, e.g. https://gateway.chaoscha.in`
+      );
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error(
+        `Invalid gateway baseUrl protocol "${parsed.protocol}". Only http/https are supported.`
+      );
+    }
+    this.gatewayUrl = parsed.toString().replace(/\/$/, ''); // Remove trailing slash
     this.timeout = this._resolveTimeout(
       config.timeoutMs,
       config.timeoutSeconds,
@@ -614,5 +630,75 @@ export class GatewayClient {
   ): Promise<WorkflowStatus> {
     const workflow = await this.closeEpoch(studioAddress, epoch, signerAddress);
     return this.waitForCompletion(workflow.workflowId, options);
+  }
+
+  // ===========================================================================
+  // Read API — Studio Work Discovery
+  // ===========================================================================
+
+  /**
+   * Fetch pending (unfinalized) work for a studio from the gateway.
+   *
+   * @param studioAddress - 0x-prefixed studio contract address
+   * @param options - Optional limit/offset for pagination
+   * @returns Typed pending work response
+   */
+  async getPendingWork(
+    studioAddress: string,
+    options?: { limit?: number; offset?: number }
+  ): Promise<PendingWorkResponse> {
+    const limit = options?.limit ?? 20;
+    const offset = options?.offset ?? 0;
+    const url = `${this.gatewayUrl}/v1/studio/${studioAddress}/work?status=pending&limit=${limit}&offset=${offset}`;
+
+    try {
+      const response = await axios.get(url, {
+        timeout: this.timeout,
+        headers: this._buildHeaders(),
+      });
+      return response.data as PendingWorkResponse;
+    } catch (error: unknown) {
+      const axiosErr = error as AxiosError;
+      if (axiosErr.code === 'ECONNREFUSED' || axiosErr.code === 'ENOTFOUND' || !axiosErr.response) {
+        throw new GatewayConnectionError(
+          `ChaosChain gateway unreachable at ${this.gatewayUrl}. Check GATEWAY_URL.`,
+        );
+      }
+      if (axiosErr.response) {
+        throw new GatewayError(
+          `Gateway returned ${axiosErr.response.status}: ${JSON.stringify(axiosErr.response.data)}`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Fetch full evidence graph for a work submission.
+   * Endpoint: GET /v1/work/{hash}/evidence
+   */
+  async getWorkEvidence(workHash: string): Promise<WorkEvidenceResponse> {
+    const url = `${this.gatewayUrl}/v1/work/${workHash}/evidence`;
+
+    try {
+      const response = await axios.get(url, {
+        timeout: this.timeout,
+        headers: this._buildHeaders(),
+      });
+      return response.data as WorkEvidenceResponse;
+    } catch (error: unknown) {
+      const axiosErr = error as AxiosError;
+      if (axiosErr.code === 'ECONNREFUSED' || axiosErr.code === 'ENOTFOUND' || !axiosErr.response) {
+        throw new GatewayConnectionError(
+          `ChaosChain gateway unreachable at ${this.gatewayUrl}. Check GATEWAY_URL.`
+        );
+      }
+      if (axiosErr.response) {
+        throw new GatewayError(
+          `Gateway returned ${axiosErr.response.status}: ${JSON.stringify(axiosErr.response.data)}`
+        );
+      }
+      throw error;
+    }
   }
 }

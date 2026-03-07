@@ -18,3 +18,4 @@ docs/
 
 keys/
 test-facilitator-curl.sh
+.tmp/

@@ -53,6 +53,25 @@ Storage backends are optional and intended for development/testing. In productio
 
 ## Canonical Examples
 
+### 0) External Verifier Minimal Integration
+
+```typescript
+import { GatewayClient, derivePoAScores } from '@chaoschain/sdk';
+
+const STUDIO_ADDRESS = '0xA855F7893ac01653D1bCC24210bFbb3c47324649';
+const gateway = new GatewayClient({
+  baseUrl: 'https://gateway.chaoscha.in',
+});
+
+const pending = await gateway.getPendingWork(STUDIO_ADDRESS, { limit: 20, offset: 0 });
+console.log(`Pending work items: ${pending.data.work.length}`);
+
+// Example scoring call once evidence graph is fetched
+const exampleEvidence = pending.data.work.length ? [] : [];
+const scores = derivePoAScores(exampleEvidence);
+console.log(scores); // [initiative, collaboration, reasoning, compliance, efficiency]
+```
+
 ### 1) Minimal “Happy Path” (Gateway-first)
 
 ```typescript
@@ -320,7 +339,7 @@ console.log(`Amount: ${costs.amount}, Fee: ${costs.fee}, Total: ${costs.total}`)
 - ✅ Uses EIP-3009 `transferWithAuthorization` via a facilitator
 - ✅ Generates HTTP 402 payment requirements and headers
 - ✅ USDC support on supported networks
-- **Default facilitator**: `https://facilitator.chaoscha.in` (override with `facilitatorUrl` in config or `CC_FACILITATOR_URL` env). Provide `facilitatorApiKey` when required by your facilitator.
+- ⚠️ Provide `facilitatorUrl` (and optional `facilitatorApiKey`) for production
 
 ### **Storage (Gateway-First)**
 
@@ -561,9 +580,10 @@ interface ChaosChainSDKConfig {
   mnemonic?: string; // Or HD wallet mnemonic (exactly one)
   walletFile?: string; // Or wallet file path (exactly one)
   rpcUrl?: string; // RPC URL (set explicitly for production)
-  gatewayUrl?: string; // Shortcut for gatewayConfig.gatewayUrl
+  gatewayUrl?: string; // Shortcut for gatewayConfig.baseUrl (legacy alias)
   gatewayConfig?: {
-    gatewayUrl: string;
+    baseUrl?: string; // preferred, defaults to https://gateway.chaoscha.in
+    gatewayUrl?: string; // legacy alias for baseUrl
     timeout?: number; // ms
     timeoutMs?: number;
     timeoutSeconds?: number;

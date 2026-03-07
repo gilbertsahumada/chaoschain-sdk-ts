@@ -1,25 +1,26 @@
 {
   "name": "@chaoschain/sdk",
-  "version": "0.2.2",
+  "version": "0.2.3",
+  "type": "module",
   "description": "TypeScript SDK for building verifiable AI agents on ChaosChain",
-  "main": "./dist/index.js",
-  "module": "./dist/index.mjs",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.js"
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
     },
     "./providers/storage": {
       "types": "./dist/providers/storage/index.d.ts",
-      "import": "./dist/providers/storage/index.mjs",
-      "require": "./dist/providers/storage/index.js"
+      "import": "./dist/providers/storage/index.js",
+      "require": "./dist/providers/storage/index.cjs"
     },
     "./providers/compute": {
       "types": "./dist/providers/compute/index.d.ts",
-      "import": "./dist/providers/compute/index.mjs",
-      "require": "./dist/providers/compute/index.js"
+      "import": "./dist/providers/compute/index.js",
+      "require": "./dist/providers/compute/index.cjs"
     }
   },
   "files": [

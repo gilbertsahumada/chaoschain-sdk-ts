@@ -267,7 +267,9 @@ export class ChaosChainSDK {
     if (config.gatewayConfig || config.gatewayUrl) {
       const gatewayConfig = config.gatewayConfig || { gatewayUrl: config.gatewayUrl! };
       this.gateway = new GatewayClient(gatewayConfig);
-      console.log(`🌐 Gateway client initialized: ${gatewayConfig.gatewayUrl}`);
+      console.log(
+        `🌐 Gateway client initialized: ${gatewayConfig.baseUrl || gatewayConfig.gatewayUrl || 'https://gateway.chaoscha.in'}`
+      );
     }
 
     // Initialize Studio client for direct on-chain operations
@@ -852,7 +854,7 @@ export class ChaosChainSDK {
    * Get SDK version
    */
   getVersion(): string {
-    return '0.1.3';
+    return '0.2.3';
   }
 
   /**

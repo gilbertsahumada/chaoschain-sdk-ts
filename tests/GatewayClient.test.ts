@@ -64,6 +64,22 @@ describe('GatewayClient', () => {
       expect((c as any).pollInterval).toBe(2000);
     });
 
+    it('should accept baseUrl and normalize trailing slash', () => {
+      const c = new GatewayClient({ baseUrl: 'https://gateway.chaoscha.in/' });
+      expect((c as any).gatewayUrl).toBe('https://gateway.chaoscha.in');
+    });
+
+    it('should default to production ChaosChain gateway URL', () => {
+      const c = new GatewayClient({});
+      expect((c as any).gatewayUrl).toBe('https://gateway.chaoscha.in');
+    });
+
+    it('should throw helpful error for invalid baseUrl', () => {
+      expect(() => new GatewayClient({ baseUrl: 'not-a-url' })).toThrow(
+        /Invalid gateway baseUrl/i
+      );
+    });
+
     it('should resolve timeoutSeconds to milliseconds', () => {
       const c = new GatewayClient({
         gatewayUrl: 'http://test.com',
@@ -735,6 +751,112 @@ describe('Gateway Exceptions', () => {
       expect(error.workflowError).toEqual(workflowError);
       expect(error.name).toBe('WorkflowFailedError');
     });
+  });
+});
+
+// =============================================================================
+// getPendingWork
+// =============================================================================
+
+describe('GatewayClient — getPendingWork', () => {
+  let client: GatewayClient;
+  const gatewayUrl = 'http://localhost:3000';
+
+  beforeEach(() => {
+    client = new GatewayClient({ gatewayUrl });
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const STUDIO = '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC';
+
+  it('returns pending work items', async () => {
+    const mockResponse = {
+      data: {
+        version: '1.0',
+        data: {
+          studio: STUDIO,
+          work: [{ work_id: '0xabc', agent_id: 42, epoch: 1, submitted_at: '2026-03-01T00:00:00.000Z', evidence_anchor: null, derivation_root: null }],
+          total: 1,
+          limit: 20,
+          offset: 0,
+        },
+      },
+    };
+    mockedAxios.get.mockResolvedValueOnce(mockResponse);
+
+    const result = await client.getPendingWork(STUDIO);
+    expect(result.data.work).toHaveLength(1);
+    expect(result.data.studio).toBe(STUDIO);
+    expect(mockedAxios.get).toHaveBeenCalledWith(
+      expect.stringContaining(`/v1/studio/${STUDIO}/work`),
+      expect.any(Object),
+    );
+  });
+
+  it('handles empty response', async () => {
+    const mockResponse = {
+      data: {
+        version: '1.0',
+        data: { studio: STUDIO, work: [], total: 0, limit: 20, offset: 0 },
+      },
+    };
+    mockedAxios.get.mockResolvedValueOnce(mockResponse);
+
+    const result = await client.getPendingWork(STUDIO);
+    expect(result.data.work).toHaveLength(0);
+    expect(result.data.total).toBe(0);
+  });
+
+  it('throws GatewayConnectionError when gateway unreachable', async () => {
+    const networkError = { code: 'ECONNREFUSED', response: undefined, message: 'Network error' };
+    mockedAxios.get.mockRejectedValueOnce(networkError);
+
+    await expect(client.getPendingWork(STUDIO)).rejects.toThrow(GatewayConnectionError);
+
+    mockedAxios.get.mockRejectedValueOnce(networkError);
+    await expect(client.getPendingWork(STUDIO)).rejects.toThrow(/gateway unreachable/i);
+  });
+});
+
+// =============================================================================
+// getWorkEvidence
+// =============================================================================
+
+describe('GatewayClient — getWorkEvidence', () => {
+  let client: GatewayClient;
+  const gatewayUrl = 'http://localhost:3000';
+
+  beforeEach(() => {
+    client = new GatewayClient({ gatewayUrl });
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns work evidence payload', async () => {
+    mockedAxios.get.mockResolvedValueOnce({
+      data: {
+        version: '1.0',
+        data: {
+          work_id: '0xwork',
+          thread_root: '0xthread',
+          dkg_evidence: [],
+        },
+      },
+    });
+
+    const result = await client.getWorkEvidence('0xwork');
+    expect(result.data.work_id).toBe('0xwork');
+    expect(mockedAxios.get).toHaveBeenCalledWith(
+      `${gatewayUrl}/v1/work/0xwork/evidence`,
+      expect.any(Object)
+    );
   });
 });
 

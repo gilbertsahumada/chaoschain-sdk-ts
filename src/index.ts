@@ -169,13 +169,41 @@ export {
   WorkflowFailedError,
 } from './exceptions';
 
+// Gateway Read API Types
+export type { PendingWorkItem, PendingWorkResponse, WorkEvidenceResponse } from './types';
+
 // Deprecated Types
 export type { XMTPMessageData, DKGNodeData } from './types';
 
 // ============================================================================
+// Evidence DAG Utilities
+// ============================================================================
+export {
+  computeDepth,
+  derivePoAScores,
+  validateEvidenceGraph,
+  verifyWorkEvidence,
+  extractAgencySignals,
+  composeScoreVector,
+  rangeFit,
+} from './evidence';
+
+export type {
+  EvidencePackage,
+  WorkEvidenceVerificationResult,
+  WorkVerificationResult,
+  AgencySignals,
+  VerifierAssessment,
+  ScoreRange,
+  EngineeringStudioPolicy,
+  WorkMandate,
+  SignalExtractionContext,
+} from './evidence';
+
+// ============================================================================
 // Version Info
 // ============================================================================
-export const SDK_VERSION = '0.2.0';
+export const SDK_VERSION = '0.2.3';
 export const ERC8004_VERSION = '1.0';
 export const X402_VERSION = '1.0';
 

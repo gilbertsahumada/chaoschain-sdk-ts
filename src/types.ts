@@ -4,6 +4,7 @@
  */
 
 import { ethers } from 'ethers';
+import type { EvidencePackage } from './evidence';
 
 // ============================================================================
 // Core Enums
@@ -740,8 +741,10 @@ export interface GatewayRetryConfig {
  * Gateway client configuration.
  */
 export interface GatewayClientConfig {
-  /** Gateway API URL (e.g., "http://localhost:3000") */
-  gatewayUrl: string;
+  /** Gateway API URL (preferred key, e.g. "https://gateway.chaoscha.in"). */
+  baseUrl?: string;
+  /** Legacy alias for baseUrl (kept for backward compatibility). */
+  gatewayUrl?: string;
   /** Request timeout in milliseconds (default: 30000) */
   timeout?: number;
   /** Request timeout in milliseconds (alias of timeout) */
@@ -766,6 +769,39 @@ export interface GatewayClientConfig {
   auth?: GatewayAuthConfig;
   /** Optional retry configuration (disabled by default) */
   retry?: GatewayRetryConfig;
+}
+
+// ============================================================================
+// Gateway Read API Types
+// ============================================================================
+
+export interface PendingWorkItem {
+  work_id: string;
+  agent_id: number;
+  epoch: number | null;
+  submitted_at: string;
+  evidence_anchor: string | null;
+  derivation_root: string | null;
+}
+
+export interface PendingWorkResponse {
+  version: string;
+  data: {
+    studio: string;
+    work: PendingWorkItem[];
+    total: number;
+    limit: number;
+    offset: number;
+  };
+}
+
+export interface WorkEvidenceResponse {
+  version: string;
+  data: {
+    work_id: string;
+    thread_root: string;
+    dkg_evidence: EvidencePackage[];
+  };
 }
 
 // ============================================================================

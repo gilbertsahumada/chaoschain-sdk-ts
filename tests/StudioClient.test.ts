@@ -352,6 +352,37 @@ describe('StudioClient', () => {
 });
 
 // ===========================================================================
+// Guide method signature verification
+// ===========================================================================
+
+describe('StudioClient — Guide Method Signatures', () => {
+  let client: StudioClient;
+
+  beforeEach(() => {
+    vi.mocked(getContractAddresses).mockReturnValue({
+      chaos_core: '0xChaosCoreAddress',
+      rewards_distributor: '0xRewardsDistributorAddress',
+    } as any);
+
+    client = new StudioClient({
+      provider: { getBalance: vi.fn() } as any,
+      signer: { getAddress: vi.fn() } as any,
+      network: 'ethereum-sepolia',
+    });
+  });
+
+  it('registerWithStudio accepts (studioAddress, agentId, role, stakeAmount)', () => {
+    expect(typeof client.registerWithStudio).toBe('function');
+    expect(client.registerWithStudio.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('submitScoreVectorForWorker accepts (studioAddress, dataHash, workerAddress, scores)', () => {
+    expect(typeof client.submitScoreVectorForWorker).toBe('function');
+    expect(client.submitScoreVectorForWorker.length).toBeGreaterThanOrEqual(4);
+  });
+});
+
+// ===========================================================================
 // Integration-style tests for commit-reveal pattern
 // ===========================================================================
 
