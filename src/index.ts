@@ -185,6 +185,7 @@ export {
   verifyWorkEvidence,
   extractAgencySignals,
   composeScoreVector,
+  composeScoreVectorWithDefaults,
   rangeFit,
 } from './evidence';
 
@@ -194,6 +195,7 @@ export type {
   WorkVerificationResult,
   AgencySignals,
   VerifierAssessment,
+  DemoAssessment,
   ScoreRange,
   EngineeringStudioPolicy,
   WorkMandate,

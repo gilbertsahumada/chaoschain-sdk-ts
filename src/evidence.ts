@@ -45,11 +45,25 @@ export interface WorkVerificationResult {
 }
 
 /**
- * Verifier assessment — optional overrides for each dimension.
+ * Verifier assessment for production scoring.
+ * Compliance and efficiency are REQUIRED — verifier agents must provide them.
  * Values can be in 0..1 (normalized) or 0..100 (integer); the SDK
  * auto-detects and normalizes internally.
  */
 export type VerifierAssessment = {
+  complianceScore: number;
+  efficiencyScore: number;
+  initiativeScore?: number;
+  collaborationScore?: number;
+  reasoningScore?: number;
+  rationale?: string;
+};
+
+/**
+ * Relaxed assessment for demo/test use only.
+ * All fields optional — missing compliance/efficiency fall back to signals or 0.
+ */
+export type DemoAssessment = {
   initiativeScore?: number;
   collaborationScore?: number;
   reasoningScore?: number;
@@ -88,6 +102,8 @@ export type AgencySignals = {
     requiredArtifactsPresent?: string[];
     missingArtifacts?: string[];
     durationMs?: number;
+    fragmentationPenalty?: number;
+    overcomplexityPenalty?: number;
   };
 };
 
@@ -234,26 +250,62 @@ function resolveScoring(
 function computeObserved(evidence: EvidencePackage[]) {
   const totalNodes = evidence.length;
 
+  const byId = new Map<string, EvidencePackage>();
   const childrenOf = new Map<string, string[]>();
   for (const e of evidence) {
+    byId.set(e.arweave_tx_id, e);
     childrenOf.set(e.arweave_tx_id, []);
   }
 
   let edgeCount = 0;
   let rootCount = 0;
-  let integrationNodeCount = 0;
   let artifactCount = 0;
 
   for (const e of evidence) {
     edgeCount += e.parent_ids.length;
     if (e.parent_ids.length === 0) rootCount++;
-    if (e.parent_ids.length > 1) integrationNodeCount++;
     if (e.artifact_ids.length > 0) artifactCount++;
 
     for (const pid of e.parent_ids) {
       const c = childrenOf.get(pid);
       if (c) c.push(e.arweave_tx_id);
     }
+  }
+
+  // Build root-origin map: for each node, which root nodes are its ancestors?
+  // A root node's origin set is just itself.
+  const rootOrigins = new Map<string, Set<string>>();
+
+  function getRootOrigins(id: string): Set<string> {
+    if (rootOrigins.has(id)) return rootOrigins.get(id)!;
+    const node = byId.get(id);
+    if (!node || node.parent_ids.length === 0) {
+      const s = new Set([id]);
+      rootOrigins.set(id, s);
+      return s;
+    }
+    const origins = new Set<string>();
+    for (const pid of node.parent_ids) {
+      for (const r of getRootOrigins(pid)) origins.add(r);
+    }
+    rootOrigins.set(id, origins);
+    return origins;
+  }
+
+  for (const e of evidence) getRootOrigins(e.arweave_tx_id);
+
+  // Only count integration nodes when parents originate from different roots
+  let integrationNodeCount = 0;
+  for (const e of evidence) {
+    if (e.parent_ids.length < 2) continue;
+    const parentRootSets = e.parent_ids
+      .filter(pid => byId.has(pid))
+      .map(pid => rootOrigins.get(pid)!);
+    const uniqueRoots = new Set<string>();
+    for (const s of parentRootSets) {
+      for (const r of s) uniqueRoots.add(r);
+    }
+    if (uniqueRoots.size >= 2) integrationNodeCount++;
   }
 
   let terminalCount = 0;
@@ -453,14 +505,16 @@ export function extractAgencySignals(
   };
 
   if (!scoring) {
-    // Phase 1 baseline: raw ratios clamped to [0, 1]
-    initiativeSignal = Math.max(0, Math.min(1, rootRatio));
-    collaborationSignal = Math.max(0, Math.min(1, edgeDensity));
-    reasoningSignal = Math.max(0, Math.min(1, depthRatio));
+    // No-policy fallback: soft-cap at 0.9 so raw ratios never auto-saturate.
+    // A perfect 1.0 should only be achievable via policy-fit scoring.
+    const SOFT_CAP = 0.9;
+    initiativeSignal = Math.max(0, Math.min(SOFT_CAP, rootRatio));
+    collaborationSignal = Math.max(0, Math.min(SOFT_CAP, edgeDensity));
+    reasoningSignal = Math.max(0, Math.min(SOFT_CAP, depthRatio));
   } else {
     // Phase 2: policy-conditioned signals via rangeFit
     const ir = scoring.initiative.rootRatio;
-    initiativeSignal = rangeFit(rootRatio, ir.min, ir.target, ir.max);
+    const initiativeBase = rangeFit(rootRatio, ir.min, ir.target, ir.max);
 
     const cw = scoring.collaboration.weights;
     const ed = scoring.collaboration.edgeDensity;
@@ -477,7 +531,24 @@ export function extractAgencySignals(
     collaborationSignal = Math.max(0, Math.min(1, collaborationSignal));
 
     const dr = scoring.reasoning.depthRatio;
-    reasoningSignal = rangeFit(depthRatio, dr.min, dr.target, dr.max);
+    const reasoningBase = rangeFit(depthRatio, dr.min, dr.target, dr.max);
+
+    // Phase 3B: Anti-gaming penalties
+    const fragmentationPenalty =
+      rootRatio > ir.max
+        ? (rootRatio - ir.max) * 0.5
+        : 0;
+
+    const overcomplexityPenalty =
+      depthRatio > dr.max
+        ? (depthRatio - dr.max) * 0.5
+        : 0;
+
+    initiativeSignal = Math.max(0, Math.min(1, initiativeBase - fragmentationPenalty));
+    reasoningSignal = Math.max(0, Math.min(1, reasoningBase - overcomplexityPenalty));
+
+    observedBlock.fragmentationPenalty = fragmentationPenalty;
+    observedBlock.overcomplexityPenalty = overcomplexityPenalty;
 
     // Deterministic compliance
     const compResult = computeComplianceSignal(evidence, observed, scoring, context?.workMandate);
@@ -557,35 +628,66 @@ function normalizeInput(value: number): number {
 const CLAMP_100 = (v: number) => Math.max(0, Math.min(100, Math.round(v)));
 
 /**
- * Composes a final on-chain score vector from deterministic signals and
- * optional verifier assessment.
+ * Internal: resolve an optional override against a signal fallback.
+ */
+function resolveDimension(
+  override: number | undefined,
+  signal: number | undefined,
+): number {
+  if (override !== undefined) return normalizeInput(override);
+  return signal ?? 0;
+}
+
+/**
+ * Production score vector composition for verifier agents.
  *
- * For each dimension:
- *   - If the verifier provides an override → use it (normalized)
- *   - Otherwise → use the deterministic signal
- *   - If the signal is also undefined → 0
+ * Compliance and efficiency are REQUIRED — verifier agents must explicitly
+ * provide these based on their judgment + deterministic signals. Throws if
+ * either is missing.
+ *
+ * Initiative, collaboration, and reasoning default to deterministic signals
+ * unless the verifier provides overrides.
  *
  * Input values can be in 0..1 or 0..100; the SDK auto-detects.
  * Output is always integer tuple [0..100] × 5 ready for contract submission.
  */
 export function composeScoreVector(
   signals: AgencySignals,
-  assessment?: VerifierAssessment,
+  assessment: VerifierAssessment,
 ): [number, number, number, number, number] {
-  const resolve = (
-    override: number | undefined,
-    signal: number | undefined,
-  ): number => {
-    if (override !== undefined) return normalizeInput(override);
-    return signal ?? 0;
-  };
+  if (assessment.complianceScore === undefined || assessment.complianceScore === null) {
+    throw new Error('complianceScore is required for production scoring');
+  }
+  if (assessment.efficiencyScore === undefined || assessment.efficiencyScore === null) {
+    throw new Error('efficiencyScore is required for production scoring');
+  }
 
   return [
-    CLAMP_100(resolve(assessment?.initiativeScore, signals.initiativeSignal) * 100),
-    CLAMP_100(resolve(assessment?.collaborationScore, signals.collaborationSignal) * 100),
-    CLAMP_100(resolve(assessment?.reasoningScore, signals.reasoningSignal) * 100),
-    CLAMP_100(resolve(assessment?.complianceScore, signals.complianceSignal) * 100),
-    CLAMP_100(resolve(assessment?.efficiencyScore, signals.efficiencySignal) * 100),
+    CLAMP_100(resolveDimension(assessment.initiativeScore, signals.initiativeSignal) * 100),
+    CLAMP_100(resolveDimension(assessment.collaborationScore, signals.collaborationSignal) * 100),
+    CLAMP_100(resolveDimension(assessment.reasoningScore, signals.reasoningSignal) * 100),
+    CLAMP_100(normalizeInput(assessment.complianceScore) * 100),
+    CLAMP_100(normalizeInput(assessment.efficiencyScore) * 100),
+  ];
+}
+
+/**
+ * Demo/test score vector composition — all fields optional.
+ *
+ * Falls back to deterministic signals (or 0) for any missing dimension.
+ * Use this for demo scripts and testing only — production verifier agents
+ * must use composeScoreVector() which enforces compliance/efficiency.
+ */
+export function composeScoreVectorWithDefaults(
+  signals: AgencySignals,
+  assessment?: DemoAssessment,
+): [number, number, number, number, number] {
+  return [
+    CLAMP_100(resolveDimension(assessment?.initiativeScore, signals.initiativeSignal) * 100),
+    CLAMP_100(resolveDimension(assessment?.collaborationScore, signals.collaborationSignal) * 100),
+    CLAMP_100(resolveDimension(assessment?.reasoningScore, signals.reasoningSignal) * 100),
+    CLAMP_100(resolveDimension(assessment?.complianceScore, signals.complianceSignal) * 100),
+    CLAMP_100(resolveDimension(assessment?.efficiencyScore, signals.efficiencySignal) * 100),
   ];
 }
 
@@ -599,8 +701,8 @@ export function composeScoreVector(
  * Returns [Initiative, Collaboration, Reasoning, Compliance, Efficiency]
  * as integers 0..100 for on-chain submission.
  *
- * Compliance and efficiency come from signals when available, or from the
- * verifier-provided `options`. No hardcoded placeholders.
+ * Uses composeScoreVectorWithDefaults internally — compliance and efficiency
+ * fall back to signals or 0 when not provided.
  */
 export function derivePoAScores(
   evidence: EvidencePackage[],
@@ -615,7 +717,7 @@ export function derivePoAScores(
 
   const signals = extractAgencySignals(evidence);
 
-  return composeScoreVector(signals, {
+  return composeScoreVectorWithDefaults(signals, {
     complianceScore: options?.compliance,
     efficiencyScore: options?.efficiency,
   });

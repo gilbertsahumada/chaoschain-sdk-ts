@@ -7,6 +7,7 @@ import {
   verifyWorkEvidence,
   extractAgencySignals,
   composeScoreVector,
+  composeScoreVectorWithDefaults,
   rangeFit,
   EngineeringStudioPolicy,
   WorkMandate,
@@ -68,11 +69,11 @@ describe('derivePoAScores', () => {
   it('returns signal-derived scores for 3 root nodes, no edges', () => {
     const evidence = [makeNode('a'), makeNode('b'), makeNode('c')];
     const scores = derivePoAScores(evidence);
-    expect(scores[0]).toBe(100); // initiative: all roots
-    expect(scores[1]).toBe(0);   // collaboration: no edges
-    expect(scores[2]).toBe(33);  // reasoning: depth 1/3
-    expect(scores[3]).toBe(0);   // compliance: no signal, no override
-    expect(scores[4]).toBe(0);   // efficiency: no signal, no override
+    expect(scores[0]).toBe(90); // initiative: rootRatio=1.0 → soft-capped at 0.9
+    expect(scores[1]).toBe(0);  // collaboration: no edges
+    expect(scores[2]).toBe(33); // reasoning: depthRatio=1/3=0.333 < 0.9
+    expect(scores[3]).toBe(0);
+    expect(scores[4]).toBe(0);
   });
 
   it('options override compliance and efficiency (0..100 range)', () => {
@@ -106,7 +107,7 @@ describe('derivePoAScores', () => {
     expect(scores).toEqual([0, 0, 0, 75, 80]);
   });
 
-  it('handles a linear chain correctly', () => {
+  it('handles a linear chain correctly (soft-capped)', () => {
     const evidence = [
       makeNode('a'),
       makeNode('b', ['a']),
@@ -114,8 +115,8 @@ describe('derivePoAScores', () => {
     ];
     const [initiative, collaboration, reasoning] = derivePoAScores(evidence);
     expect(initiative).toBe(33);
-    expect(collaboration).toBe(100);
-    expect(reasoning).toBe(100);
+    expect(collaboration).toBe(90);
+    expect(reasoning).toBe(90);
   });
 
   it('no hardcoded 75/80 placeholders anywhere', () => {
@@ -173,8 +174,8 @@ describe('verifyWorkEvidence', () => {
     expect(result.valid).toBe(true);
     expect(result.signals).toBeDefined();
     expect(result.signals!.initiativeSignal).toBeCloseTo(0.5);
-    expect(result.signals!.collaborationSignal).toBeCloseTo(1.0);
-    expect(result.signals!.reasoningSignal).toBeCloseTo(1.0);
+    expect(result.signals!.collaborationSignal).toBeCloseTo(0.9); // soft-capped
+    expect(result.signals!.reasoningSignal).toBeCloseTo(0.9);     // soft-capped
   });
 
   it('returns valid=false and no signals for invalid DAG', () => {
@@ -356,6 +357,8 @@ describe('extractAgencySignals', () => {
   });
 
   it('correctly counts terminal nodes in a diamond DAG', () => {
+    // Diamond: a→b, a→c, d→[b,c]. Only root is 'a'.
+    // d merges b and c but both trace to the same root — NOT cross-root integration.
     const evidence = [
       makeNode('a'),
       makeNode('b', ['a']),
@@ -365,7 +368,7 @@ describe('extractAgencySignals', () => {
     const { observed } = extractAgencySignals(evidence);
     expect(observed.terminalCount).toBe(1);
     expect(observed.rootCount).toBe(1);
-    expect(observed.integrationNodeCount).toBe(1);
+    expect(observed.integrationNodeCount).toBe(0);
     expect(observed.edgeCount).toBe(4);
   });
 
@@ -401,11 +404,128 @@ describe('extractAgencySignals', () => {
     expect(signals.efficiencySignal).toBeUndefined();
   });
 
-  it('single node: initiative=1, collaboration=0, reasoning=1', () => {
+  it('single node: initiative=0.9 (soft-capped), collaboration=0, reasoning=0.9', () => {
     const signals = extractAgencySignals([makeNode('a')]);
-    expect(signals.initiativeSignal).toBe(1);
+    expect(signals.initiativeSignal).toBeCloseTo(0.9);
     expect(signals.collaborationSignal).toBe(0);
-    expect(signals.reasoningSignal).toBe(1);
+    expect(signals.reasoningSignal).toBeCloseTo(0.9);
+  });
+
+  it('5-node linear chain: structural signals capped below 1.0', () => {
+    const evidence = [
+      makeNode('a'),
+      makeNode('b', ['a']),
+      makeNode('c', ['b']),
+      makeNode('d', ['c']),
+      makeNode('e', ['d']),
+    ];
+    const signals = extractAgencySignals(evidence);
+    // Without policy, raw edgeDensity=1.0 and depthRatio=1.0 are capped at 0.9
+    expect(signals.collaborationSignal).toBeLessThanOrEqual(0.9);
+    expect(signals.collaborationSignal).toBeGreaterThan(0);
+    expect(signals.reasoningSignal).toBeLessThanOrEqual(0.9);
+    expect(signals.reasoningSignal).toBeGreaterThan(0);
+    // The key: they do NOT reach 1.0
+    expect(signals.collaborationSignal).toBeLessThan(1.0);
+    expect(signals.reasoningSignal).toBeLessThan(1.0);
+  });
+
+  it('no-policy fallback never produces exactly 1.0 on any structural signal', () => {
+    const graphs = [
+      [makeNode('a')],
+      [makeNode('a'), makeNode('b', ['a'])],
+      [makeNode('a'), makeNode('b', ['a']), makeNode('c', ['b'])],
+      [makeNode('a'), makeNode('b'), makeNode('c', ['a', 'b'])],
+    ];
+    for (const evidence of graphs) {
+      const signals = extractAgencySignals(evidence);
+      expect(signals.initiativeSignal).toBeLessThanOrEqual(0.9);
+      expect(signals.collaborationSignal).toBeLessThanOrEqual(0.9);
+      expect(signals.reasoningSignal).toBeLessThanOrEqual(0.9);
+    }
+  });
+
+  it('fan-in DAG with policy targets produces meaningful non-zero signals', () => {
+    // 5-node fan-in: 2 roots, 1 integration node, depth 3
+    // rootRatio=0.4, edgeDensity=4/4=1.0, integrationRatio=1/5=0.2, depthRatio=3/5=0.6
+    const evidence = [
+      makeNode('a'),
+      makeNode('b'),
+      makeNode('c', ['a', 'b']),
+      makeNode('d', ['c']),
+      makeNode('e', ['d']),
+    ];
+    // Policy ranges chosen so observed values land near the targets
+    const policy: EngineeringStudioPolicy = {
+      version: '1.0',
+      studioName: 'Test',
+      scoring: {
+        initiative: { rootRatio: { min: 0.1, target: 0.4, max: 0.8 } },
+        collaboration: {
+          edgeDensity: { min: 0.3, target: 0.9, max: 1.5 },
+          integrationRatio: { min: 0.0, target: 0.2, max: 0.5 },
+          weights: { edgeDensity: 0.6, integrationRatio: 0.4 },
+        },
+        reasoning: { depthRatio: { min: 0.2, target: 0.6, max: 1.0 } },
+        compliance: {
+          requiredChecks: [], forbiddenPatterns: [], requiredArtifacts: [],
+          weights: { testsPresent: 0, requiredArtifactsPresent: 0, noPolicyViolations: 0 },
+        },
+        efficiency: { weights: {} },
+      },
+      verifierInstructions: { initiative: '', collaboration: '', reasoning: '', compliance: '', efficiency: '' },
+    };
+    const signals = extractAgencySignals(evidence, { studioPolicy: policy });
+    // All signals should be meaningfully positive (not saturated, not zero)
+    expect(signals.initiativeSignal).toBeGreaterThanOrEqual(0.5);
+    expect(signals.initiativeSignal).toBeLessThanOrEqual(1.0);
+    expect(signals.collaborationSignal).toBeGreaterThanOrEqual(0.5);
+    expect(signals.collaborationSignal).toBeLessThanOrEqual(1.0);
+    expect(signals.reasoningSignal).toBeGreaterThanOrEqual(0.49);
+    expect(signals.reasoningSignal).toBeLessThanOrEqual(1.0);
+  });
+
+  it('fan-in DAG with policy scores higher than linear chain with same policy', () => {
+    const linear = [
+      makeNode('a'),
+      makeNode('b', ['a']),
+      makeNode('c', ['b']),
+      makeNode('d', ['c']),
+      makeNode('e', ['d']),
+    ];
+    const fanIn = [
+      makeNode('a'),
+      makeNode('b'),
+      makeNode('c', ['a', 'b']),
+      makeNode('d', ['c']),
+      makeNode('e', ['d']),
+    ];
+    const policy: EngineeringStudioPolicy = {
+      version: '1.0',
+      studioName: 'Test',
+      scoring: {
+        initiative: { rootRatio: { min: 0.1, target: 0.4, max: 0.8 } },
+        collaboration: {
+          edgeDensity: { min: 0.2, target: 0.8, max: 1.0 },
+          integrationRatio: { min: 0.0, target: 0.3, max: 0.7 },
+          weights: { edgeDensity: 0.6, integrationRatio: 0.4 },
+        },
+        reasoning: { depthRatio: { min: 0.2, target: 0.6, max: 1.0 } },
+        compliance: {
+          requiredChecks: [], forbiddenPatterns: [], requiredArtifacts: [],
+          weights: { testsPresent: 0, requiredArtifactsPresent: 0, noPolicyViolations: 0 },
+        },
+        efficiency: { weights: {} },
+      },
+      verifierInstructions: { initiative: '', collaboration: '', reasoning: '', compliance: '', efficiency: '' },
+    };
+    const linearSignals = extractAgencySignals(linear, { studioPolicy: policy });
+    const fanInSignals = extractAgencySignals(fanIn, { studioPolicy: policy });
+
+    // Fan-in has more initiative (2 roots vs 1)
+    expect(fanInSignals.initiativeSignal).toBeGreaterThan(linearSignals.initiativeSignal);
+    // Fan-in has integration nodes → higher collaboration
+    expect(fanInSignals.collaborationSignal).toBeGreaterThan(linearSignals.collaborationSignal);
   });
 });
 
@@ -902,6 +1022,170 @@ describe('signal safety guards', () => {
 });
 
 // =============================================================================
+// Phase 3A — Integration Node Inflation Prevention
+// =============================================================================
+
+describe('integration node counting (anti-inflation)', () => {
+  it('merge node with parents from same root → NOT counted', () => {
+    // a→b, a→c, d→[b,c]. All descend from root a.
+    const evidence = [
+      makeNode('a'),
+      makeNode('b', ['a']),
+      makeNode('c', ['a']),
+      makeNode('d', ['b', 'c']),
+    ];
+    const { observed } = extractAgencySignals(evidence);
+    expect(observed.integrationNodeCount).toBe(0);
+  });
+
+  it('merge node combining two root branches → counted', () => {
+    // a (root), b (root), c→[a,b]
+    const evidence = [
+      makeNode('a'),
+      makeNode('b'),
+      makeNode('c', ['a', 'b']),
+    ];
+    const { observed } = extractAgencySignals(evidence);
+    expect(observed.integrationNodeCount).toBe(1);
+  });
+
+  it('large linear chain with merge commit → NOT counted', () => {
+    // a→b→c→d→e, f→[d,e]. d and e both trace to root a only.
+    const evidence = [
+      makeNode('a'),
+      makeNode('b', ['a']),
+      makeNode('c', ['b']),
+      makeNode('d', ['c']),
+      makeNode('e', ['d']),
+      makeNode('f', ['d', 'e']),
+    ];
+    const { observed } = extractAgencySignals(evidence);
+    expect(observed.integrationNodeCount).toBe(0);
+  });
+
+  it('merge of two independent chains counts as integration', () => {
+    // root1→a→b, root2→c→d, merge→[b,d]
+    const evidence = [
+      makeNode('root1'),
+      makeNode('a', ['root1']),
+      makeNode('b', ['a']),
+      makeNode('root2'),
+      makeNode('c', ['root2']),
+      makeNode('d', ['c']),
+      makeNode('merge', ['b', 'd']),
+    ];
+    const { observed } = extractAgencySignals(evidence);
+    expect(observed.integrationNodeCount).toBe(1);
+  });
+});
+
+// =============================================================================
+// Phase 3B — Anti-Gaming Penalties
+// =============================================================================
+
+describe('anti-gaming penalties', () => {
+  const penaltyPolicy: EngineeringStudioPolicy = {
+    version: '1.0',
+    studioName: 'Penalty Test Studio',
+    scoring: {
+      initiative: {
+        rootRatio: { min: 0.1, target: 0.35, max: 0.6 },
+      },
+      collaboration: {
+        edgeDensity: { min: 0.2, target: 0.7, max: 1.5 },
+        integrationRatio: { min: 0.0, target: 0.15, max: 0.5 },
+        weights: { edgeDensity: 0.6, integrationRatio: 0.4 },
+      },
+      reasoning: {
+        depthRatio: { min: 0.1, target: 0.4, max: 0.7 },
+      },
+      compliance: {
+        requiredChecks: [],
+        forbiddenPatterns: [],
+        requiredArtifacts: [],
+        weights: { testsPresent: 0.5, requiredArtifactsPresent: 0.3, noPolicyViolations: 0.2 },
+      },
+      efficiency: {
+        weights: {},
+      },
+    },
+    verifierInstructions: {
+      initiative: '', collaboration: '', reasoning: '', compliance: '', efficiency: '',
+    },
+  };
+
+  it('root spam reduces initiativeSignal vs normal', () => {
+    // 10 roots + 1 child = rootRatio ≈ 0.91 — way above max 0.6
+    const roots = Array.from({ length: 10 }, (_, i) => makeNode(`r${i}`));
+    const evidence = [...roots, makeNode('child', ['r0'])];
+
+    const signals = extractAgencySignals(evidence, { studioPolicy: penaltyPolicy });
+    expect(signals.observed.fragmentationPenalty).toBeGreaterThan(0);
+    // rangeFit(0.91, 0.1, 0.35, 0.6) = 0 (outside max), penalty further reduces
+    expect(signals.initiativeSignal).toBe(0);
+  });
+
+  it('overly deep chain reduces reasoningSignal', () => {
+    // 10-node linear chain: depthRatio = 10/10 = 1.0 — above max 0.7
+    const evidence: EvidencePackage[] = [makeNode('n0')];
+    for (let i = 1; i < 10; i++) {
+      evidence.push(makeNode(`n${i}`, [`n${i - 1}`]));
+    }
+
+    const signals = extractAgencySignals(evidence, { studioPolicy: penaltyPolicy });
+    expect(signals.observed.overcomplexityPenalty).toBeGreaterThan(0);
+    // rangeFit(1.0, 0.1, 0.4, 0.7) = 0 (outside max), penalty further reduces
+    expect(signals.reasoningSignal).toBe(0);
+  });
+
+  it('normal fan-in DAG within policy ranges has zero penalties', () => {
+    // 2 roots, 3 children, 1 merge = 6 nodes
+    // rootRatio = 2/6 ≈ 0.33 (within [0.1, 0.6])
+    // depthRatio = 3/6 = 0.5 (within [0.1, 0.7])
+    const evidence = [
+      makeNode('r1'),
+      makeNode('r2'),
+      makeNode('a', ['r1']),
+      makeNode('b', ['r2']),
+      makeNode('c', ['a', 'b']),
+      makeNode('d', ['c']),
+    ];
+    const signals = extractAgencySignals(evidence, { studioPolicy: penaltyPolicy });
+    expect(signals.observed.fragmentationPenalty).toBe(0);
+    expect(signals.observed.overcomplexityPenalty).toBe(0);
+    expect(signals.initiativeSignal).toBeGreaterThan(0);
+    expect(signals.reasoningSignal).toBeGreaterThan(0);
+  });
+
+  it('penalties do not reduce a within-range signal', () => {
+    // 3-node graph: rootRatio = 1/3 ≈ 0.33, depthRatio = 3/3 = 1.0
+    // initiative: rootRatio 0.33 is within [0.1, 0.6] → no penalty
+    // reasoning: depthRatio 1.0 > max 0.7 → penalty applies
+    const evidence = [
+      makeNode('a'),
+      makeNode('b', ['a']),
+      makeNode('c', ['b']),
+    ];
+    const signals = extractAgencySignals(evidence, { studioPolicy: penaltyPolicy });
+    expect(signals.observed.fragmentationPenalty).toBe(0);
+    expect(signals.observed.overcomplexityPenalty).toBeGreaterThan(0);
+    // Initiative was within range — no penalty applied
+    expect(signals.initiativeSignal).toBeGreaterThan(0);
+  });
+
+  it('no penalties in no-policy fallback path', () => {
+    const evidence = [
+      makeNode('a'),
+      makeNode('b', ['a']),
+      makeNode('c', ['b']),
+    ];
+    const signals = extractAgencySignals(evidence);
+    expect(signals.observed.fragmentationPenalty).toBeUndefined();
+    expect(signals.observed.overcomplexityPenalty).toBeUndefined();
+  });
+});
+
+// =============================================================================
 // composeScoreVector
 // =============================================================================
 
@@ -918,44 +1202,43 @@ describe('composeScoreVector', () => {
     },
   };
 
-  it('converts 0..1 signals to 0..100 integers', () => {
-    const vector = composeScoreVector(baseSignals);
-    expect(vector).toEqual([67, 85, 50, 90, 72]);
-    expect(vector.every(v => Number.isInteger(v))).toBe(true);
+  it('throws when complianceScore is missing', () => {
+    expect(() =>
+      composeScoreVector(baseSignals, { efficiencyScore: 80 } as any),
+    ).toThrow('complianceScore is required for production scoring');
   });
 
-  it('all outputs are integers in 0..100', () => {
-    const vector = composeScoreVector(baseSignals);
-    for (const v of vector) {
-      expect(Number.isInteger(v)).toBe(true);
-      expect(v).toBeGreaterThanOrEqual(0);
-      expect(v).toBeLessThanOrEqual(100);
-    }
+  it('throws when efficiencyScore is missing', () => {
+    expect(() =>
+      composeScoreVector(baseSignals, { complianceScore: 80 } as any),
+    ).toThrow('efficiencyScore is required for production scoring');
   });
 
-  it('verifier overrides in 0..100 range take precedence', () => {
-    const vector = composeScoreVector(baseSignals, {
-      complianceScore: 95,
-      efficiencyScore: 88,
-    });
-    expect(vector[3]).toBe(95);
-    expect(vector[4]).toBe(88);
-    // first 3 still from signals
-    expect(vector[0]).toBe(67);
-    expect(vector[1]).toBe(85);
-    expect(vector[2]).toBe(50);
-  });
-
-  it('verifier overrides in 0..1 range are auto-detected', () => {
+  it('valid 0..1 input produces correct 0..100 output', () => {
     const vector = composeScoreVector(baseSignals, {
       complianceScore: 0.92,
       efficiencyScore: 0.78,
     });
     expect(vector[3]).toBe(92);
     expect(vector[4]).toBe(78);
+    expect(vector[0]).toBe(67);
+    expect(vector[1]).toBe(85);
+    expect(vector[2]).toBe(50);
   });
 
-  it('verifier can override all dimensions', () => {
+  it('valid 0..100 input produces correct 0..100 output', () => {
+    const vector = composeScoreVector(baseSignals, {
+      complianceScore: 95,
+      efficiencyScore: 88,
+    });
+    expect(vector[3]).toBe(95);
+    expect(vector[4]).toBe(88);
+    expect(vector[0]).toBe(67);
+    expect(vector[1]).toBe(85);
+    expect(vector[2]).toBe(50);
+  });
+
+  it('optional dimension overrides replace signal-derived values', () => {
     const vector = composeScoreVector(baseSignals, {
       initiativeScore: 80,
       collaborationScore: 60,
@@ -966,16 +1249,89 @@ describe('composeScoreVector', () => {
     expect(vector).toEqual([80, 60, 70, 90, 75]);
   });
 
-  it('clamps out-of-range overrides to 0..100', () => {
+  it('all outputs clamped to 0..100', () => {
     const vector = composeScoreVector(baseSignals, {
       complianceScore: 150,
       efficiencyScore: -20,
     });
     expect(vector[3]).toBe(100);
     expect(vector[4]).toBe(0);
+    for (const v of vector) {
+      expect(Number.isInteger(v)).toBe(true);
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(100);
+    }
   });
 
-  it('defaults to 0 when signal and override are both missing', () => {
+  it('returns exactly 5 elements', () => {
+    const vector = composeScoreVector(baseSignals, {
+      complianceScore: 80,
+      efficiencyScore: 70,
+    });
+    expect(vector).toHaveLength(5);
+  });
+
+  it('assessment value of 0 is respected (not treated as missing)', () => {
+    const vector = composeScoreVector(baseSignals, {
+      complianceScore: 0,
+      efficiencyScore: 0,
+    });
+    expect(vector[3]).toBe(0);
+    expect(vector[4]).toBe(0);
+  });
+
+  it('rationale is accepted without affecting output', () => {
+    const vector = composeScoreVector(baseSignals, {
+      complianceScore: 80,
+      efficiencyScore: 70,
+      rationale: 'Tests pass, good quality',
+    });
+    expect(vector[3]).toBe(80);
+    expect(vector[4]).toBe(70);
+  });
+
+  it('full pipeline: extract → compose with overrides', () => {
+    const evidence = [
+      makeNode('a', [], ['src/main.ts']),
+      makeNode('b', ['a'], ['src/handler.ts']),
+      makeNode('c', ['b'], ['tests/main.test.ts']),
+    ];
+    const signals = extractAgencySignals(evidence);
+    const vector = composeScoreVector(signals, {
+      complianceScore: 85,
+      efficiencyScore: 78,
+    });
+    expect(vector).toHaveLength(5);
+    expect(vector.every(v => Number.isInteger(v) && v >= 0 && v <= 100)).toBe(true);
+    expect(vector[3]).toBe(85);
+    expect(vector[4]).toBe(78);
+  });
+});
+
+// =============================================================================
+// composeScoreVectorWithDefaults (demo/test helper)
+// =============================================================================
+
+describe('composeScoreVectorWithDefaults', () => {
+  const baseSignals: AgencySignals = {
+    initiativeSignal: 0.67,
+    collaborationSignal: 0.85,
+    reasoningSignal: 0.5,
+    complianceSignal: 0.9,
+    efficiencySignal: 0.72,
+    observed: {
+      totalNodes: 3, rootCount: 2, edgeCount: 1, maxDepth: 2,
+      artifactCount: 3, terminalCount: 1, integrationNodeCount: 0,
+    },
+  };
+
+  it('works with no assessment at all', () => {
+    const vector = composeScoreVectorWithDefaults(baseSignals);
+    expect(vector).toEqual([67, 85, 50, 90, 72]);
+    expect(vector.every(v => Number.isInteger(v))).toBe(true);
+  });
+
+  it('falls back to 0 when signal and override are both missing', () => {
     const sparse: AgencySignals = {
       initiativeSignal: 0.5,
       collaborationSignal: 0.3,
@@ -985,24 +1341,7 @@ describe('composeScoreVector', () => {
         artifactCount: 1, terminalCount: 1, integrationNodeCount: 0,
       },
     };
-    const vector = composeScoreVector(sparse);
-    expect(vector[0]).toBe(50);
-    expect(vector[1]).toBe(30);
-    expect(vector[2]).toBe(40);
-    expect(vector[3]).toBe(0); // no compliance signal, no override
-    expect(vector[4]).toBe(0); // no efficiency signal, no override
-  });
-
-  it('returns exactly 5 elements', () => {
-    const vector = composeScoreVector(baseSignals);
-    expect(vector).toHaveLength(5);
-  });
-
-  it('assessment value of 0 is respected (not treated as missing)', () => {
-    const vector = composeScoreVector(baseSignals, {
-      complianceScore: 0,
-      efficiencyScore: 0,
-    });
+    const vector = composeScoreVectorWithDefaults(sparse);
     expect(vector[3]).toBe(0);
     expect(vector[4]).toBe(0);
   });
@@ -1019,22 +1358,15 @@ describe('composeScoreVector', () => {
         artifactCount: 1, terminalCount: 1, integrationNodeCount: 0,
       },
     };
-    expect(composeScoreVector(perfect)).toEqual([100, 100, 100, 100, 100]);
+    expect(composeScoreVectorWithDefaults(perfect)).toEqual([100, 100, 100, 100, 100]);
   });
 
-  it('full pipeline: extract → compose with overrides', () => {
-    const evidence = [
-      makeNode('a', [], ['src/main.ts']),
-      makeNode('b', ['a'], ['src/handler.ts']),
-      makeNode('c', ['b'], ['tests/main.test.ts']),
-    ];
-    const signals = extractAgencySignals(evidence);
-    const vector = composeScoreVector(signals, {
+  it('partial overrides merge with signal defaults', () => {
+    const vector = composeScoreVectorWithDefaults(baseSignals, {
       complianceScore: 85,
       efficiencyScore: 78,
     });
-    expect(vector).toHaveLength(5);
-    expect(vector.every(v => Number.isInteger(v) && v >= 0 && v <= 100)).toBe(true);
+    expect(vector[0]).toBe(67);
     expect(vector[3]).toBe(85);
     expect(vector[4]).toBe(78);
   });
