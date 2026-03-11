@@ -777,11 +777,17 @@ export interface GatewayClientConfig {
 
 export interface PendingWorkItem {
   work_id: string;
+  data_hash: string;
   agent_id: number;
+  worker_address: string;
+  studio_address: string;
   epoch: number | null;
   submitted_at: string;
   evidence_anchor: string | null;
   derivation_root: string | null;
+  studio_policy_version: string;
+  work_mandate_id: string;
+  task_type: string;
 }
 
 export interface PendingWorkResponse {
