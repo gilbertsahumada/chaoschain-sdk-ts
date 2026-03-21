@@ -133,7 +133,11 @@ function mockCompleteResponse() {
 }
 
 function mockScoreSubmissionResponse() {
-  return { data: { workflow_id: 'wf-score-123' } };
+  return { data: { workflow_id: 'wf-score-123', id: 'wf-score-123' } };
+}
+
+function mockWorkflowPollResponse() {
+  return { data: { data: { state: 'COMPLETED' } } };
 }
 
 function createVerifier() {
@@ -172,6 +176,10 @@ function setupMocks() {
     // POST /score-submission
     if (method === 'POST' && url.includes('/score-submission')) {
       return mockScoreSubmissionResponse();
+    }
+    // GET /workflows/{id} (poll)
+    if (method === 'GET' && url.includes('/workflows/')) {
+      return mockWorkflowPollResponse();
     }
 
     return { data: {} };

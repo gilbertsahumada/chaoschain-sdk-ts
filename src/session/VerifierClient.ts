@@ -98,6 +98,13 @@ export interface VerifierReviewAssessment {
   collaboration?: number;
   /** Optional reasoning override (0–100). Defaults to deterministic signal. */
   reasoning?: number;
+  /**
+   * On-chain worker address. Override when the on-chain submitter differs
+   * from the session's agent_address (e.g. gateway admin submitted on behalf).
+   */
+  workerAddress?: string;
+  /** Admin signer address for the registerValidator step (onlyOwner). */
+  adminSignerAddress?: string;
 }
 
 /** Result of a completed review. */
@@ -282,7 +289,8 @@ export class VerifierClient {
     });
 
     // Submit score to gateway
-    const scoreResult = await this.postScoreSubmission({
+    const workerAddr = assessment.workerAddress ?? metadata.agent_address;
+    const payload: Record<string, unknown> = {
       studio_address: metadata.studio_address,
       epoch: assessment.epoch,
       validator_address: this.agentAddress,
@@ -290,20 +298,35 @@ export class VerifierClient {
       scores: [...scores],
       signer_address: this.agentAddress,
       mode: 'direct',
-      worker_address: metadata.agent_address,
+      worker_address: workerAddr,
       salt: '0x' + '0'.repeat(64),
-    });
+    };
+    if (assessment.adminSignerAddress) {
+      payload.admin_signer_address = assessment.adminSignerAddress;
+    }
+
+    const scoreResult = await this.postScoreSubmission(payload);
+
+    // Poll for workflow completion if we got an id
+    let finalWorkflowId = scoreResult.workflow_id ?? scoreResult.id ?? null;
+    if (finalWorkflowId) {
+      const finalState = await this.pollWorkflow(finalWorkflowId);
+      if (finalState.state === 'FAILED') {
+        const errorDetail = finalState.error ?? 'unknown error';
+        throw new Error(`Score submission workflow failed: ${errorDetail}`);
+      }
+    }
 
     await session.complete({
-      summary: `Verification complete — scores submitted for worker ${metadata.agent_address.slice(0, 10)}...`,
+      summary: `Verification complete — scores submitted for worker ${workerAddr.slice(0, 10)}...`,
     });
 
     return {
       scores,
-      workflowId: scoreResult.workflow_id ?? null,
+      workflowId: finalWorkflowId,
       verifierSessionId: session.sessionId,
       workerSessionId,
-      workerAddress: metadata.agent_address,
+      workerAddress: workerAddr,
       dataHash: metadata.data_hash!,
     };
   }
@@ -330,9 +353,37 @@ export class VerifierClient {
 
   private async postScoreSubmission(
     payload: Record<string, unknown>,
-  ): Promise<{ workflow_id?: string }> {
+  ): Promise<{ workflow_id?: string; id?: string }> {
     const url = `${this.gatewayUrl}/workflows/score-submission`;
-    return this.post<{ workflow_id?: string }>(url, payload);
+    return this.post<{ workflow_id?: string; id?: string }>(url, payload);
+  }
+
+  private async pollWorkflow(
+    workflowId: string,
+    maxPollMs = 120_000,
+    intervalMs = 5_000,
+  ): Promise<{ state: string; error?: string }> {
+    const url = `${this.gatewayUrl}/workflows/${workflowId}`;
+    const deadline = Date.now() + maxPollMs;
+
+    while (Date.now() < deadline) {
+      try {
+        const data = await this.get<{ state?: string; error?: string; data?: { state?: string; error?: string } }>(url);
+        const state = data.data?.state ?? data.state ?? 'UNKNOWN';
+
+        if (state === 'COMPLETED' || state === 'FAILED') {
+          return { state, error: data.data?.error ?? data.error };
+        }
+      } catch (err) {
+        // Retry on rate limit (429), re-throw anything else
+        const msg = err instanceof Error ? err.message : '';
+        if (!msg.includes('429')) throw err;
+      }
+
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+
+    return { state: 'TIMEOUT', error: `Workflow ${workflowId} did not complete within ${maxPollMs}ms` };
   }
 
   private async get<T>(url: string): Promise<T> {

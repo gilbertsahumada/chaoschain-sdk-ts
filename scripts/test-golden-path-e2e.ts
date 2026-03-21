@@ -4,7 +4,17 @@
  * Full flow using only the SDK:
  *   1. Worker creates session, logs work, completes
  *   2. Verifier inspects the worker's evidence
- *   3. Verifier submits score
+ *   3. Verifier submits score (with correct on-chain addresses)
+ *
+ * Env vars:
+ *   GATEWAY_URL          — gateway base URL (default: http://localhost:3001)
+ *   CHAOSCHAIN_API_KEY   — gateway API key
+ *   STUDIO_ADDRESS       — studio contract address
+ *   AGENT_ADDRESS        — worker session agent address (Copilot)
+ *   VERIFIER_ADDRESS     — on-chain registered verifier address
+ *   ONCHAIN_WORKER_ADDR  — on-chain worker address (who did submitWork)
+ *   ADMIN_SIGNER_ADDR    — admin signer for registerValidator (onlyOwner)
+ *   EPOCH                — current epoch number
  */
 
 import { SessionClient } from '../src/session/SessionClient';
@@ -13,11 +23,20 @@ import { VerifierClient } from '../src/session/VerifierClient';
 const GATEWAY_URL = process.env.GATEWAY_URL ?? 'http://localhost:3001';
 const API_KEY = process.env.CHAOSCHAIN_API_KEY!;
 const STUDIO = process.env.STUDIO_ADDRESS!;
-const WORKER_ADDR = process.env.AGENT_ADDRESS!;
-const VERIFIER_ADDR = process.env.OVERRIDE_AGENT_ADDRESS!;
-const EPOCH = Number(process.env.EPOCH ?? '0');
+const WORKER_SESSION_ADDR = process.env.AGENT_ADDRESS!;
+const VERIFIER_ADDR = process.env.VERIFIER_ADDRESS!;
+const ONCHAIN_WORKER = process.env.ONCHAIN_WORKER_ADDR!;
+const ADMIN_SIGNER = process.env.ADMIN_SIGNER_ADDR!;
+const EPOCH = Number(process.env.EPOCH ?? '13');
 
-const required = ['CHAOSCHAIN_API_KEY', 'STUDIO_ADDRESS', 'AGENT_ADDRESS', 'OVERRIDE_AGENT_ADDRESS'] as const;
+const required = [
+  'CHAOSCHAIN_API_KEY',
+  'STUDIO_ADDRESS',
+  'AGENT_ADDRESS',
+  'VERIFIER_ADDRESS',
+  'ONCHAIN_WORKER_ADDR',
+  'ADMIN_SIGNER_ADDR',
+] as const;
 const missing = required.filter((k) => !process.env[k]);
 if (missing.length > 0) {
   console.error(`Missing env vars: ${missing.join(', ')}`);
@@ -26,11 +45,13 @@ if (missing.length > 0) {
 
 (async () => {
   console.log('=== Golden Path E2E ===');
-  console.log(`  Gateway:  ${GATEWAY_URL}`);
-  console.log(`  Studio:   ${STUDIO}`);
-  console.log(`  Worker:   ${WORKER_ADDR}`);
-  console.log(`  Verifier: ${VERIFIER_ADDR}`);
-  console.log(`  Epoch:    ${EPOCH}`);
+  console.log(`  Gateway:          ${GATEWAY_URL}`);
+  console.log(`  Studio:           ${STUDIO}`);
+  console.log(`  Worker (session): ${WORKER_SESSION_ADDR}`);
+  console.log(`  Worker (on-chain):${ONCHAIN_WORKER}`);
+  console.log(`  Verifier:         ${VERIFIER_ADDR}`);
+  console.log(`  Admin signer:     ${ADMIN_SIGNER}`);
+  console.log(`  Epoch:            ${EPOCH}`);
   console.log();
 
   // =========================================================================
@@ -42,7 +63,7 @@ if (missing.length > 0) {
 
   const session = await sessionClient.start({
     studio_address: STUDIO,
-    agent_address: WORKER_ADDR,
+    agent_address: WORKER_SESSION_ADDR,
     task_type: 'feature',
   });
   console.log(`  Session created: ${session.sessionId}`);
@@ -103,11 +124,18 @@ if (missing.length > 0) {
   // PHASE 3: Verifier submits score
   // =========================================================================
   console.log('--- Phase 3: Verifier Submits Score ---');
+  console.log('  Submitting with:');
+  console.log(`    validator_address:    ${VERIFIER_ADDR}`);
+  console.log(`    worker_address:       ${ONCHAIN_WORKER}`);
+  console.log(`    admin_signer_address: ${ADMIN_SIGNER}`);
+  console.log(`    epoch:                ${EPOCH}`);
 
   const result = await inspection.submit({
     compliance: 85,
     efficiency: 78,
     epoch: EPOCH,
+    workerAddress: ONCHAIN_WORKER,
+    adminSignerAddress: ADMIN_SIGNER,
   });
 
   console.log(`  Scores submitted: [${result.scores.join(', ')}]`);
