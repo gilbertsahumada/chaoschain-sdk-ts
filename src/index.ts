@@ -182,6 +182,13 @@ export { Session } from './session/Session';
 export type { SessionAgentRole, SessionAgentOverride, SessionLogOptions, SessionCompleteResult } from './session/Session';
 export { SessionClient } from './session/SessionClient';
 export type { SessionClientConfig, SessionStartOptions } from './session/SessionClient';
+export { VerifierClient } from './session/VerifierClient';
+export type {
+  VerifierClientConfig,
+  VerifierReviewAssessment,
+  VerifierReviewResult,
+  VerifierInspection,
+} from './session/VerifierClient';
 
 // ============================================================================
 // Evidence DAG Utilities

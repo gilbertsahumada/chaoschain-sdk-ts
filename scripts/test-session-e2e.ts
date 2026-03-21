@@ -109,7 +109,14 @@ function fail(step: number, msg: string): never {
     agent: { agent_address: OVERRIDE_AGENT, role: 'collaborator' },
   });
   depth++;
-  ok(3, `Event logged with agent override [${OVERRIDE_AGENT.slice(0, 8)}...] (depth: ${depth})`);
+  ok(3, `Event logged with agent override [${OVERRIDE_AGENT.slice(0, 8)}...] role=collaborator (depth: ${depth})`);
+
+  await session.log({
+    summary: 'Verification: signatures and evidence DAG validated',
+    agent: { agent_address: OVERRIDE_AGENT, role: 'verifier' },
+  });
+  depth++;
+  ok(3, `Event logged with agent override [${OVERRIDE_AGENT.slice(0, 8)}...] role=verifier (depth: ${depth})`);
 
   // Step 4 — Complete session
   const result = await session.complete({ summary: 'Bug fixed and tested' });
@@ -136,8 +143,8 @@ function fail(step: number, msg: string): never {
 
   const summary = ctx.evidence_summary;
   if (!summary) fail(5, 'evidence_summary missing from context response');
-  if (summary.node_count < 7) {
-    fail(5, `node_count too low: expected >= 7, got ${summary.node_count}`);
+  if (summary.node_count < 8) {
+    fail(5, `node_count too low: expected >= 8, got ${summary.node_count}`);
   }
 
   ok(5, `Evidence summary: node_count=${summary.node_count}, roots=${(summary.roots ?? []).length}, terminals=${(summary.terminals ?? []).length}`);
