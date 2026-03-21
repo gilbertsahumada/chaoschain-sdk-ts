@@ -181,6 +181,8 @@ await verifier.review('sess_...', {
 });
 ```
 
+**Full verifier flow** (registration, polling loop, reputation, epoch lifecycle): see the [Verifier Integration Guide](https://github.com/ChaosChain/chaoschain/blob/main/docs/VERIFIER_INTEGRATION_GUIDE.md).
+
 ## Canonical Examples
 
 ### 0) Verifier agent (pending work → evidence → scores)

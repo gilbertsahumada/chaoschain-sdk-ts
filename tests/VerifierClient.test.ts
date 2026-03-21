@@ -34,6 +34,35 @@ function mockContextResponse() {
           work_mandate_id: 'generic-task',
           task_type: 'feature',
         },
+        studioPolicy: {
+          version: '1.0',
+          studioName: 'Engineering Agent Studio',
+          scoring: {
+            initiative: { rootRatio: { min: 0.2, target: 0.6, max: 1 } },
+            collaboration: {
+              edgeDensity: { min: 0.2, target: 0.8, max: 1 },
+              integrationRatio: { min: 0, target: 0.3, max: 0.7 },
+              weights: { edgeDensity: 0.6, integrationRatio: 0.4 },
+            },
+            reasoning: { depthRatio: { min: 0.2, target: 0.6, max: 1 } },
+            compliance: {
+              requiredChecks: ['tests_present'],
+              forbiddenPatterns: [],
+              requiredArtifacts: ['code-change'],
+              weights: { testsPresent: 0.4, requiredArtifactsPresent: 0.3, noPolicyViolations: 0.3 },
+            },
+            efficiency: {
+              artifactCountRatio: { min: 0.2, target: 1, max: 2 },
+              weights: { artifactCountRatio: 1 },
+            },
+          },
+        },
+        workMandate: {
+          taskId: 'generic-task',
+          title: 'General task',
+          objective: 'Complete assigned work',
+          taskType: 'general',
+        },
       },
     },
   };
@@ -246,19 +275,20 @@ describe('VerifierClient', () => {
   });
 
   describe('inspect()', () => {
-    it('should return signals, events, and metadata', async () => {
+    it('should validate DAG and return signals, events, and metadata', async () => {
       const verifier = createVerifier();
       const review = await verifier.inspect(SESSION_ID);
 
+      expect(review.valid).toBe(true);
       expect(review.workerAddress).toBe(WORKER_ADDRESS);
       expect(review.studioAddress).toBe(STUDIO_ADDRESS);
       expect(review.dataHash).toBe(DATA_HASH);
       expect(review.nodeCount).toBe(3);
       expect(review.events).toHaveLength(3);
       expect(review.signals).toBeDefined();
-      expect(review.signals.initiativeSignal).toBeGreaterThanOrEqual(0);
-      expect(review.signals.collaborationSignal).toBeGreaterThanOrEqual(0);
-      expect(review.signals.reasoningSignal).toBeGreaterThanOrEqual(0);
+      expect(review.signals!.initiativeSignal).toBeGreaterThanOrEqual(0);
+      expect(review.signals!.collaborationSignal).toBeGreaterThanOrEqual(0);
+      expect(review.signals!.reasoningSignal).toBeGreaterThanOrEqual(0);
     });
 
     it('should provide a submit function', async () => {
@@ -275,6 +305,87 @@ describe('VerifierClient', () => {
 
       expect(result.scores).toHaveLength(5);
       expect(result.workerSessionId).toBe(SESSION_ID);
+    });
+
+    it('should reject invalid DAG on submit', async () => {
+      // Create evidence with broken parent reference
+      mockedAxios.mockImplementation(async (config: any) => {
+        if (config.method === 'GET' && config.url.includes('/context')) {
+          return mockContextResponse();
+        }
+        if (config.method === 'GET' && config.url.includes('/evidence')) {
+          return {
+            data: {
+              data: {
+                evidence_dag: {
+                  nodes: [
+                    {
+                      node_id: 'evt-1',
+                      event_id: 'evt-1',
+                      session_id: SESSION_ID,
+                      event_type: 'plan_created',
+                      agent_address: WORKER_ADDRESS,
+                      timestamp: '2026-03-21T10:00:00.000Z',
+                      parent_ids: ['nonexistent-parent'],
+                      payload_hash: '0xhash1',
+                      summary: 'Broken parent reference',
+                      artifacts: [],
+                      metadata: {},
+                    },
+                  ],
+                },
+              },
+            },
+          };
+        }
+        return { data: {} };
+      });
+
+      const verifier = createVerifier();
+      const review = await verifier.inspect(SESSION_ID);
+
+      expect(review.valid).toBe(false);
+      expect(review.signals).toBeUndefined();
+      expect(() => review.submit({ compliance: 80, efficiency: 75, epoch: 1 }))
+        .toThrow('evidence DAG for session');
+    });
+
+    it('should throw on review() with invalid DAG', async () => {
+      mockedAxios.mockImplementation(async (config: any) => {
+        if (config.method === 'GET' && config.url.includes('/context')) {
+          return mockContextResponse();
+        }
+        if (config.method === 'GET' && config.url.includes('/evidence')) {
+          return {
+            data: {
+              data: {
+                evidence_dag: {
+                  nodes: [
+                    {
+                      node_id: 'evt-1',
+                      event_id: 'evt-1',
+                      session_id: SESSION_ID,
+                      event_type: 'plan_created',
+                      agent_address: WORKER_ADDRESS,
+                      timestamp: '2026-03-21T10:00:00.000Z',
+                      parent_ids: ['nonexistent-parent'],
+                      payload_hash: '0xhash1',
+                      summary: 'Broken',
+                      artifacts: [],
+                      metadata: {},
+                    },
+                  ],
+                },
+              },
+            },
+          };
+        }
+        return { data: {} };
+      });
+
+      const verifier = createVerifier();
+      await expect(verifier.review(SESSION_ID, { compliance: 80, efficiency: 75, epoch: 1 }))
+        .rejects.toThrow('evidence DAG for session');
     });
 
     it('should throw if session has no data_hash', async () => {

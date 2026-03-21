@@ -25,11 +25,13 @@
 import axios, { AxiosError } from 'axios';
 import { SessionClient } from './SessionClient';
 import {
-  extractAgencySignals,
+  verifyWorkEvidence,
   composeScoreVector,
   type EvidencePackage,
   type AgencySignals,
   type VerifierAssessment,
+  type EngineeringStudioPolicy,
+  type WorkMandate,
 } from '../evidence';
 
 // =============================================================================
@@ -75,6 +77,13 @@ interface SessionMetadata {
   task_type: string;
 }
 
+/** Full context response from the gateway. */
+interface SessionContext {
+  session_metadata: SessionMetadata;
+  studioPolicy?: EngineeringStudioPolicy;
+  workMandate?: WorkMandate;
+}
+
 /** Assessment provided by the verifier for scoring. */
 export interface VerifierReviewAssessment {
   /** Compliance score (0–100). Required. */
@@ -109,8 +118,10 @@ export interface VerifierReviewResult {
 
 /** Object returned by {@link VerifierClient.inspect} for two-step review. */
 export interface VerifierInspection {
-  /** Deterministic agency signals extracted from the evidence DAG. */
-  signals: AgencySignals;
+  /** Whether the evidence DAG passed structural validation. */
+  valid: boolean;
+  /** Deterministic agency signals extracted from the evidence DAG (undefined if invalid). */
+  signals: AgencySignals | undefined;
   /** Raw evidence events from the worker session. */
   events: GatewayEvidenceNode[];
   /** Worker address from session metadata. */
@@ -123,7 +134,7 @@ export interface VerifierInspection {
   workflowId: string | null;
   /** Number of evidence nodes. */
   nodeCount: number;
-  /** Submit the score after inspection. */
+  /** Submit the score after inspection. Throws if evidence is invalid. */
   submit: (assessment: VerifierReviewAssessment) => Promise<VerifierReviewResult>;
 }
 
@@ -154,6 +165,9 @@ export class VerifierClient {
     assessment: VerifierReviewAssessment,
   ): Promise<VerifierReviewResult> {
     const inspection = await this.inspect(workerSessionId);
+    if (!inspection.valid) {
+      throw new Error(`Cannot review: evidence DAG for session ${workerSessionId} is invalid`);
+    }
     return inspection.submit(assessment);
   }
 
@@ -164,7 +178,8 @@ export class VerifierClient {
    * to send the score when ready.
    */
   async inspect(workerSessionId: string): Promise<VerifierInspection> {
-    const metadata = await this.fetchSessionMetadata(workerSessionId);
+    const context = await this.fetchSessionContext(workerSessionId);
+    const metadata = context.session_metadata;
 
     if (!metadata.data_hash) {
       throw new Error(`Session ${workerSessionId} has no data_hash — is it completed?`);
@@ -172,18 +187,28 @@ export class VerifierClient {
 
     const nodes = await this.fetchEvidenceNodes(workerSessionId);
     const evidencePackages = nodes.map(toEvidencePackage);
-    const signals = extractAgencySignals(evidencePackages);
+
+    // Validate DAG structure + extract policy-aware signals (per Integration Guide)
+    const verification = verifyWorkEvidence(evidencePackages, {
+      studioPolicy: context.studioPolicy,
+      workMandate: context.workMandate,
+    });
 
     return {
-      signals,
+      valid: verification.valid,
+      signals: verification.signals,
       events: nodes,
       workerAddress: metadata.agent_address,
       studioAddress: metadata.studio_address,
       dataHash: metadata.data_hash,
       workflowId: metadata.workflow_id,
       nodeCount: nodes.length,
-      submit: (assessment) =>
-        this.submitReview(workerSessionId, metadata, nodes, signals, assessment),
+      submit: (assessment) => {
+        if (!verification.valid || !verification.signals) {
+          throw new Error(`Cannot submit score: evidence DAG for session ${workerSessionId} is invalid`);
+        }
+        return this.submitReview(workerSessionId, metadata, nodes, verification.signals, assessment);
+      },
     };
   }
 
@@ -283,14 +308,14 @@ export class VerifierClient {
     };
   }
 
-  private async fetchSessionMetadata(sessionId: string): Promise<SessionMetadata> {
+  private async fetchSessionContext(sessionId: string): Promise<SessionContext> {
     const url = `${this.gatewayUrl}/v1/sessions/${sessionId}/context`;
-    const data = await this.get<{ data: { session_metadata: SessionMetadata } }>(url);
-    const meta = data.data?.session_metadata;
-    if (!meta) {
+    const data = await this.get<{ data: SessionContext }>(url);
+    const ctx = data.data;
+    if (!ctx?.session_metadata) {
       throw new Error(`Session ${sessionId} not found or missing metadata`);
     }
-    return meta;
+    return ctx;
   }
 
   private async fetchEvidenceNodes(sessionId: string): Promise<GatewayEvidenceNode[]> {
