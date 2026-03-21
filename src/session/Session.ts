@@ -21,12 +21,15 @@ import axios, { AxiosError } from 'axios';
 // Types
 // =============================================================================
 
+/** Valid agent roles accepted by the gateway for session events. */
+export type SessionAgentRole = 'worker' | 'verifier' | 'collaborator';
+
 /** Per-event agent override. */
 export interface SessionAgentOverride {
   /** Wallet address of the agent emitting this event. */
   agent_address: string;
-  /** Agent role (defaults to `"worker"`). */
-  role?: string;
+  /** Agent role (defaults to `"worker"`). Must be `worker`, `verifier`, or `collaborator`. */
+  role?: SessionAgentRole;
 }
 
 /** Options for {@link Session.log}. */
