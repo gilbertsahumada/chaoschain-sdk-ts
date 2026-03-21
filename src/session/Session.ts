@@ -21,6 +21,14 @@ import axios, { AxiosError } from 'axios';
 // Types
 // =============================================================================
 
+/** Per-event agent override. */
+export interface SessionAgentOverride {
+  /** Wallet address of the agent emitting this event. */
+  agent_address: string;
+  /** Agent role (defaults to `"worker"`). */
+  role?: string;
+}
+
 /** Options for {@link Session.log}. */
 export interface SessionLogOptions {
   /** Human-readable description of what happened. */
@@ -29,6 +37,8 @@ export interface SessionLogOptions {
   event_type?: string;
   /** Arbitrary metadata attached to the event. */
   metadata?: Record<string, unknown>;
+  /** Override the session-level agent for this event. */
+  agent?: SessionAgentOverride;
 }
 
 /** Result returned by {@link Session.complete}. */
@@ -105,7 +115,10 @@ export class Session {
       causality: {
         parent_event_ids: this.lastEventId ? [this.lastEventId] : [],
       },
-      agent: { agent_address: this.agentAddress, role: 'worker' },
+      agent: {
+        agent_address: opts.agent?.agent_address ?? this.agentAddress,
+        role: opts.agent?.role ?? 'worker',
+      },
       studio: {
         studio_address: this.studioAddress,
         studio_policy_version: this.studioPolicyVersion,
@@ -137,9 +150,9 @@ export class Session {
    * @param stepType - Friendly step name.
    * @param summary - What happened in this step.
    */
-  async step(stepType: string, summary: string): Promise<void> {
+  async step(stepType: string, summary: string, agent?: SessionAgentOverride): Promise<void> {
     const eventType = STEP_TYPE_MAP[stepType] ?? 'artifact_created';
-    await this.log({ event_type: eventType, summary });
+    await this.log({ event_type: eventType, summary, agent });
   }
 
   /**
