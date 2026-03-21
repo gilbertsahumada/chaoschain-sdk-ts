@@ -13,7 +13,6 @@
  *   AGENT_ADDRESS        — worker session agent address (Copilot)
  *   VERIFIER_ADDRESS     — on-chain registered verifier address
  *   ONCHAIN_WORKER_ADDR  — on-chain worker address (who did submitWork)
- *   ADMIN_SIGNER_ADDR    — admin signer for registerValidator (onlyOwner)
  *   EPOCH                — current epoch number
  */
 
@@ -26,7 +25,6 @@ const STUDIO = process.env.STUDIO_ADDRESS!;
 const WORKER_SESSION_ADDR = process.env.AGENT_ADDRESS!;
 const VERIFIER_ADDR = process.env.VERIFIER_ADDRESS!;
 const ONCHAIN_WORKER = process.env.ONCHAIN_WORKER_ADDR!;
-const ADMIN_SIGNER = process.env.ADMIN_SIGNER_ADDR!;
 const EPOCH = Number(process.env.EPOCH ?? '13');
 
 const required = [
@@ -35,7 +33,6 @@ const required = [
   'AGENT_ADDRESS',
   'VERIFIER_ADDRESS',
   'ONCHAIN_WORKER_ADDR',
-  'ADMIN_SIGNER_ADDR',
 ] as const;
 const missing = required.filter((k) => !process.env[k]);
 if (missing.length > 0) {
@@ -50,7 +47,6 @@ if (missing.length > 0) {
   console.log(`  Worker (session): ${WORKER_SESSION_ADDR}`);
   console.log(`  Worker (on-chain):${ONCHAIN_WORKER}`);
   console.log(`  Verifier:         ${VERIFIER_ADDR}`);
-  console.log(`  Admin signer:     ${ADMIN_SIGNER}`);
   console.log(`  Epoch:            ${EPOCH}`);
   console.log();
 
@@ -127,7 +123,6 @@ if (missing.length > 0) {
   console.log('  Submitting with:');
   console.log(`    validator_address:    ${VERIFIER_ADDR}`);
   console.log(`    worker_address:       ${ONCHAIN_WORKER}`);
-  console.log(`    admin_signer_address: ${ADMIN_SIGNER}`);
   console.log(`    epoch:                ${EPOCH}`);
 
   const result = await inspection.submit({
@@ -135,7 +130,6 @@ if (missing.length > 0) {
     efficiency: 78,
     epoch: EPOCH,
     workerAddress: ONCHAIN_WORKER,
-    adminSignerAddress: ADMIN_SIGNER,
   });
 
   console.log(`  Scores submitted: [${result.scores.join(', ')}]`);

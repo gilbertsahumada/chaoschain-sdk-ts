@@ -103,8 +103,6 @@ export interface VerifierReviewAssessment {
    * from the session's agent_address (e.g. gateway admin submitted on behalf).
    */
   workerAddress?: string;
-  /** Admin signer address for the registerValidator step (onlyOwner). */
-  adminSignerAddress?: string;
 }
 
 /** Result of a completed review. */
@@ -301,9 +299,6 @@ export class VerifierClient {
       worker_address: workerAddr,
       salt: '0x' + '0'.repeat(64),
     };
-    if (assessment.adminSignerAddress) {
-      payload.admin_signer_address = assessment.adminSignerAddress;
-    }
 
     const scoreResult = await this.postScoreSubmission(payload);
 
