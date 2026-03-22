@@ -3,6 +3,7 @@ import { defineConfig } from 'tsup';
 export default defineConfig({
   entry: {
     index: 'src/index.ts',
+    'session/index': 'src/session/index.ts',
     'providers/storage/index': 'src/providers/storage/index.ts',
     'providers/compute/index': 'src/providers/compute/index.ts',
   },
